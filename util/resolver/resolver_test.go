@@ -75,6 +75,7 @@ mirrors = ["yourmirror.local", "proxy.local:5000/proxy.docker.io"]
 
 [registry."yourmirror.local"]
 http = true
+path = "/registry/v2"
 
 [registry."proxy.local:5000"]
 capabilities = ["pull", "resolve", "push"]
@@ -98,7 +99,7 @@ capabilities = ["pull", "resolve", "push"]
 		"yourmirror.local": {
 			description:  "http_mirror",
 			scheme:       "http",
-			path:         defaultPath,
+			path:         "/registry/v2",
 			capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve,
 		},
 		"proxy.local:5000": {

@@ -43,6 +43,10 @@ func fillConfigOpts(host string, c config.RegistryConfig, h docker.RegistryHost)
 		}
 	}
 
+	if c.Path != "" {
+		h.Path = c.Path
+	}
+
 	return fillInsecureOpts(host, c, h)
 }
 func fillInsecureOpts(host string, c config.RegistryConfig, h docker.RegistryHost) (*docker.RegistryHost, error) {

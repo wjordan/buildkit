@@ -8,6 +8,7 @@ type RegistryConfig struct {
 	KeyPairs     []TLSKeyPair `toml:"keypair"`
 	TLSConfigDir []string     `toml:"tlsconfigdir"`
 	Capabilities []string     `toml:"capabilities"`
+	Path         string       `toml:"path"`
 }
 
 type TLSKeyPair struct {
