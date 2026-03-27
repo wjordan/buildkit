@@ -123,6 +123,9 @@ func layersHandler(provider content.Provider, f func([]ocispecs.Descriptor)) ima
 
 			return index.Manifests, nil
 		default:
+			if images.IsLayerType(desc.MediaType) {
+				return nil, nil
+			}
 			return nil, errors.Errorf("encountered unknown type %v", desc.MediaType)
 		}
 	}

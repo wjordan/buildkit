@@ -1027,7 +1027,7 @@ func (sr *immutableRef) Extract(ctx context.Context, s session.Group) (rerr erro
 			return err
 		}
 		return rerr
-	} else if sr.cm.Snapshotter.Name() == "overlaybd" {
+	} else if sr.cm.Snapshotter.Name() == "overlaybd" || sr.cm.Snapshotter.Name() == "nydus" {
 		if rerr = sr.prepareRemoteSnapshotsOverlaybdMode(ctx); rerr == nil {
 			return sr.unlazy(ctx, sr.descHandlers, sr.progress, s, true, false)
 		}
@@ -1378,16 +1378,17 @@ func (sr *immutableRef) unlazyLayer(ctx context.Context, dhs DescHandlers, pg pr
 
 	key := fmt.Sprintf("extract-%s %s", identity.NewID(), sr.getChainID())
 
+	var snapshotLabels map[string]string
 	if sr.cm.Snapshotter.Name() == "overlaybd" || sr.cm.Snapshotter.Name() == "nydus" {
-		prepareLabels := map[string]string{
+		snapshotLabels = map[string]string{
 			"containerd.io/snapshot.ref": string(sr.getChainID()),
 		}
 		if dh := dhs[desc.Digest]; dh != nil {
 			for k, v := range snapshots.FilterInheritedLabels(dh.SnapshotLabels) {
-				prepareLabels[k] = v
+				snapshotLabels[k] = v
 			}
 		}
-		err = sr.cm.Snapshotter.Prepare(ctx, key, parentID, snapshots.WithLabels(prepareLabels))
+		err = sr.cm.Snapshotter.Prepare(ctx, key, parentID, snapshots.WithLabels(snapshotLabels))
 	} else {
 		err = sr.cm.Snapshotter.Prepare(ctx, key, parentID)
 	}
@@ -1418,7 +1419,13 @@ func (sr *immutableRef) unlazyLayer(ctx context.Context, dhs DescHandlers, pg pr
 	if err := unmount(); err != nil {
 		return err
 	}
-	if err := sr.cm.Snapshotter.Commit(ctx, sr.getSnapshotID(), key); err != nil {
+	// Pass snapshot labels to Commit so that nydus-snapshotter's findMetaLayer()
+	// can locate the bootstrap layer by its NydusMetaLayer label in the parent chain.
+	var commitOpts []snapshots.Opt
+	if snapshotLabels != nil {
+		commitOpts = append(commitOpts, snapshots.WithLabels(snapshotLabels))
+	}
+	if err := sr.cm.Snapshotter.Commit(ctx, sr.getSnapshotID(), key, commitOpts...); err != nil {
 		if !errors.Is(err, cerrdefs.ErrAlreadyExists) {
 			return err
 		}

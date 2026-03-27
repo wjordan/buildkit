@@ -255,6 +255,10 @@ func childrenHandler(provider content.Provider) images.HandlerFunc {
 			// childless data types.
 			return nil, nil
 		default:
+			if images.IsLayerType(desc.MediaType) {
+				// Other layer types (e.g. nydus blobs) are also childless.
+				return nil, nil
+			}
 			bklog.G(ctx).Warnf("encountered unknown type %v; children may not be fetched", desc.MediaType)
 		}
 
