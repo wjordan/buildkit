@@ -1378,13 +1378,26 @@ func (sr *immutableRef) unlazyLayer(ctx context.Context, dhs DescHandlers, pg pr
 
 	key := fmt.Sprintf("extract-%s %s", identity.NewID(), sr.getChainID())
 
-	if sr.cm.Snapshotter.Name() == "overlaybd" {
-		err = sr.cm.Snapshotter.Prepare(ctx, key, parentID,
-			snapshots.WithLabels(map[string]string{"containerd.io/snapshot.ref": string(sr.getChainID())}))
+	if sr.cm.Snapshotter.Name() == "overlaybd" || sr.cm.Snapshotter.Name() == "nydus" {
+		prepareLabels := map[string]string{
+			"containerd.io/snapshot.ref": string(sr.getChainID()),
+		}
+		if dh := dhs[desc.Digest]; dh != nil {
+			for k, v := range snapshots.FilterInheritedLabels(dh.SnapshotLabels) {
+				prepareLabels[k] = v
+			}
+		}
+		err = sr.cm.Snapshotter.Prepare(ctx, key, parentID, snapshots.WithLabels(prepareLabels))
 	} else {
 		err = sr.cm.Snapshotter.Prepare(ctx, key, parentID)
 	}
 	if err != nil {
+		if cerrdefs.IsAlreadyExists(err) {
+			// Remote snapshotter (nydus, etc.) already handled this layer.
+			sr.queueBlobOnly(false)
+			sr.queueSize(sizeUnknown)
+			return sr.commitMetadata()
+		}
 		return err
 	}
 
