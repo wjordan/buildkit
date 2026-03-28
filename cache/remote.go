@@ -166,6 +166,18 @@ func (sr *immutableRef) getRemote(ctx context.Context, createIfNeeded bool, refC
 		if err != nil {
 			return nil, err
 		}
+
+		// Skip nydus bootstrap (metadata) layers from base images.
+		// When exporting as nydus, the base image's bootstrap layer must not
+		// be included as a blob layer — MergeNydus creates a new merged
+		// bootstrap that replaces it. This check must happen before
+		// compression conversion overwrites the annotation.
+		if refCfg.Compression.Type.String() == "nydus" {
+			if _, ok := desc.Annotations["containerd.io/snapshot/nydus-bootstrap"]; ok {
+				continue
+			}
+		}
+
 		// NOTE: The media type might be missing for some migrated ones
 		// from before lease based storage. If so, we should detect
 		// the media type from blob data.
