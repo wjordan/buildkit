@@ -41,9 +41,25 @@ func MergeNydus(ctx context.Context, ref ImmutableRef, comp compression.Config, 
 	}
 
 	// Extracts nydus bootstrap from nydus format for each layer.
+	// Skip layers that are nydus bootstrap (metadata) layers from the base image —
+	// these are not data layers and should not be included in the merge.
 	var cm *cacheManager
 	layers := []converter.Layer{}
 	for _, ref := range refs {
+		// Check if this layer is a nydus bootstrap (metadata) layer.
+		// When pulling a nydus base image, the manifest includes both data blob
+		// layers and a bootstrap layer. The bootstrap is metadata that will be
+		// replaced by the merged bootstrap we create here.
+		origDesc, err := ref.ociDesc(ctx, ref.descHandlers, false)
+		if err == nil {
+			if _, isBootstrap := origDesc.Annotations[converter.LayerAnnotationNydusBootstrap]; isBootstrap {
+				if cm == nil {
+					cm = ref.cm
+				}
+				continue
+			}
+		}
+
 		blobDesc, err := getBlobWithCompressionWithRetry(ctx, ref, comp, s)
 		if err != nil {
 			return nil, errors.Wrapf(err, "get compression blob %q", comp.Type)

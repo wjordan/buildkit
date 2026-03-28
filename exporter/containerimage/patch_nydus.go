@@ -5,6 +5,7 @@ package containerimage
 import (
 	"context"
 
+	"github.com/containerd/nydus-snapshotter/pkg/converter"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/solver"
@@ -22,6 +23,21 @@ func patchImageLayers(ctx context.Context, remote *solver.Remote, history []ocis
 		remote, history = normalizeLayersAndHistory(ctx, remote, history, ref, opts.OCITypes)
 		return remote, history, nil
 	}
+
+	// Filter out nydus bootstrap layers from base images. When the base image
+	// is already nydus-formatted, its bootstrap layer ends up in the descriptor
+	// list as a converted blob. It must be removed because MergeNydus creates
+	// a new merged bootstrap that replaces it.
+	filtered := make([]ocispecs.Descriptor, 0, len(remote.Descriptors))
+	for _, d := range remote.Descriptors {
+		if d.Annotations != nil {
+			if _, ok := d.Annotations[converter.LayerAnnotationNydusBootstrap]; ok {
+				continue
+			}
+		}
+		filtered = append(filtered, d)
+	}
+	remote.Descriptors = filtered
 
 	desc, err := cache.MergeNydus(ctx, ref, opts.RefCfg.Compression, sg)
 	if err != nil {
