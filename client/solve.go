@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -90,6 +91,10 @@ func (c *Client) Solve(ctx context.Context, def *llb.Definition, opt SolveOpt, s
 type runGatewayCB func(ref string, s *session.Session, opts map[string]string) error
 
 func (c *Client) solve(ctx context.Context, def *llb.Definition, runGateway runGatewayCB, opt SolveOpt, statusChan chan *SolveStatus) (*SolveResponse, error) {
+	clientSolveStart := time.Now()
+	defer func() {
+		fmt.Fprintf(os.Stderr, "[timing] client.solve total: %s\n", time.Since(clientSolveStart))
+	}()
 	if def != nil && runGateway != nil {
 		return nil, errors.New("invalid with def and cb")
 	}
@@ -316,7 +321,9 @@ func (c *Client) solve(ctx context.Context, def *llb.Definition, runGateway runG
 			sopt.SourcePolicySession = s.ID()
 		}
 
+		grpcStart := time.Now()
 		resp, err := c.ControlClient().Solve(ctx, sopt)
+		fmt.Fprintf(os.Stderr, "[timing] client gRPC Solve round-trip: %s\n", time.Since(grpcStart))
 		if err != nil {
 			return errors.Wrap(err, "failed to solve")
 		}

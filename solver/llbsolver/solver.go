@@ -555,6 +555,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 		defer s.gatewayForwarder.UnregisterBuild(context.WithoutCancel(ctx), id)
 	}
 
+	histStart := time.Now()
 	if !internal {
 		rec, err1 := s.recordBuildHistory(ctx, id, req, exp, j, usage)
 		if err1 != nil {
@@ -562,9 +563,19 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 			return nil, err1
 		}
 		defer func() {
-			err = rec(context.WithoutCancel(ctx), resProv, descrefs, err)
+			// Run build history finalization asynchronously -- it involves
+			// expensive containerd lease operations and doesn't affect the
+			// build result. Errors are logged but don't fail the build.
+			go func() {
+				recStart := time.Now()
+				if recErr := rec(context.WithoutCancel(ctx), resProv, descrefs, err); recErr != nil {
+					bklog.G(ctx).Warnf("async build history finalization failed: %v", recErr)
+				}
+				bklog.G(ctx).Infof("[timing] build-history-finalize (async): %s", time.Since(recStart))
+			}()
 		}()
 	}
+	bklog.G(ctx).Infof("[timing] record-build-history: %s", time.Since(histStart))
 
 	solvePhaseStart := time.Now()
 	if fwd != nil {
@@ -615,6 +626,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	}
 	bklog.G(ctx).Infof("[timing] materialize-refs: %s", time.Since(refStart))
 
+	postRefStart := time.Now()
 	resProv, err = addProvenanceToResult(res, br)
 	if err != nil {
 		return nil, err
@@ -628,7 +640,9 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 		resProv = res2
 	}
 	res = resProv.Result
+	bklog.G(ctx).Infof("[timing] provenance+post: %s", time.Since(postRefStart))
 
+	convertStart := time.Now()
 	cached, err := result.ConvertResult(res, func(res solver.ResultProxy) (solver.CachedResult, error) {
 		return res.Result(ctx)
 	})
@@ -645,11 +659,9 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	if err != nil {
 		return nil, err
 	}
+	bklog.G(ctx).Infof("[timing] convert-results: %s", time.Since(convertStart))
 
-	// Functions that create new objects in containerd (eg. content blobs) need to have a lease to ensure
-	// that the object is not garbage collected immediately. This is protected by the indivual components,
-	// but because creating a lease is not cheap and requires a disk write, we create a single lease here
-	// early and let all the exporters, cache export and provenance creation use the same one.
+	leaseStart := time.Now()
 	lm, err := s.leaseManager()
 	if err != nil {
 		return nil, err
@@ -661,6 +673,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	releasers = append(releasers, func() {
 		done(context.WithoutCancel(ctx))
 	})
+	bklog.G(ctx).Infof("[timing] lease-setup: %s", time.Since(leaseStart))
 
 	cacheExporters, inlineCacheExporter := splitCacheExporters(exp.CacheExporters)
 

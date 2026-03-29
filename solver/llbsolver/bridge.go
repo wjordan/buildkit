@@ -73,6 +73,10 @@ func (b *llbBridge) Warn(ctx context.Context, dgst digest.Digest, msg string, op
 }
 
 func (b *llbBridge) loadResult(ctx context.Context, def *pb.Definition, cacheImports []gw.CacheOptionsEntry, pol []*spb.Policy) (solver.CachedResultWithProvenance, error) {
+	loadStart := time.Now()
+	defer func() {
+		bklog.G(ctx).Infof("[timing] loadResult total: %s", time.Since(loadStart))
+	}()
 	w, err := b.resolveWorker()
 	if err != nil {
 		return nil, err
@@ -143,10 +147,12 @@ func (b *llbBridge) loadResult(ctx context.Context, def *pb.Definition, cacheImp
 	}
 	dpc := &detectPrunedCacheID{}
 
+	loadLLBStart := time.Now()
 	edge, err := Load(ctx, def, b.policy(polEngine), dpc.Load, ValidateEntitlements(ent, w.CDIManager()), WithCacheSources(cms), NormalizeRuntimePlatforms(), WithValidateCaps())
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to load LLB")
 	}
+	bklog.G(ctx).Infof("[timing] loadResult.Load (LLB parse): %s", time.Since(loadLLBStart))
 
 	if len(dpc.ids) > 0 {
 		if err := b.eachWorker(func(w worker.Worker) error {
@@ -156,10 +162,12 @@ func (b *llbBridge) loadResult(ctx context.Context, def *pb.Definition, cacheImp
 		}
 	}
 
+	buildStart := time.Now()
 	res, err := b.builder.Build(ctx, edge)
 	if err != nil {
 		return nil, err
 	}
+	bklog.G(ctx).Infof("[timing] loadResult.Build (solver): %s", time.Since(buildStart))
 	return res, nil
 }
 
