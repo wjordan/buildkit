@@ -179,7 +179,7 @@ func computeBlobChain(ctx context.Context, sr *immutableRef, createIfNeeded bool
 						// (in which case lower and upper may differ by more than one layer), so print warn log on unexpected
 						// failure.
 						logWarnOnErr = sr.kind() != Diff
-					case "fuse-overlayfs", "native":
+					case "fuse-overlayfs", "native", "nydus":
 						// not supported with fuse-overlayfs snapshotter which doesn't provide overlayfs mounts.
 						// TODO: add support for fuse-overlayfs
 						enableOverlay = false

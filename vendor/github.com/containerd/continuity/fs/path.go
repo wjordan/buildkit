@@ -23,6 +23,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/sys/unix"
 )
 
 var errTooManyLinks = errors.New("too many links")
@@ -120,13 +122,30 @@ func sameFile(f1, f2 *currentPath) (bool, error) {
 			if f1.f.Size() == 0 { // if file sizes are zero length, the files are the same by definition
 				return true, nil
 			}
-			return compareFileContent(f1.fullPath, f2.fullPath)
+			eq, err := compareFileContent(f1.fullPath, f2.fullPath)
+			if err != nil && ignoreContentCompareError(err) {
+				// In the generic double-walk diff, hitting this slow path means both
+				// files already matched on size, mode, uid/gid, and second-level
+				// mtime. Lazy/remote lower filesystems can reject the final
+				// byte-for-byte compare for unchanged base files. Treat them as
+				// unchanged so diff export can continue without trying to archive
+				// the same unreadable lower file.
+				return true, nil
+			}
+			return eq, err
 		} else if t1.Nanosecond() != t2.Nanosecond() {
 			return false, nil
 		}
 	}
 
 	return true, nil
+}
+
+func ignoreContentCompareError(err error) bool {
+	return errors.Is(err, unix.EINVAL) ||
+		errors.Is(err, unix.EIO) ||
+		errors.Is(err, unix.ENOTSUP) ||
+		errors.Is(err, unix.EOPNOTSUPP)
 }
 
 func compareSymlinkTarget(p1, p2 string) (bool, error) {

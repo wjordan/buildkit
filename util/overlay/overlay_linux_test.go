@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/continuity/fs"
 	"github.com/containerd/continuity/fs/fstest"
 	"github.com/pkg/errors"
+	"golang.org/x/sys/unix"
 )
 
 // This test file contains tests that are required in continuity project.
@@ -465,5 +466,40 @@ func Modify(p string) TestChange {
 	return TestChange{
 		Kind: fs.ChangeKindModify,
 		Path: filepath.FromSlash(p),
+	}
+}
+
+func TestIgnoreContentCompareError(t *testing.T) {
+	t.Run("ignores wrapped invalid argument", func(t *testing.T) {
+		if !ignoreContentCompareError(errors.Wrap(unix.EINVAL, "read lower file")) {
+			t.Fatal("expected EINVAL to be ignored")
+		}
+	})
+
+	t.Run("keeps other errors strict", func(t *testing.T) {
+		if ignoreContentCompareError(os.ErrNotExist) {
+			t.Fatal("did not expect unrelated errors to be ignored")
+		}
+	})
+}
+
+func TestGetUpperdirNydusMountShape(t *testing.T) {
+	lower := []mount.Mount{{
+		Type:    "overlay",
+		Source:  "overlay",
+		Options: []string{"lowerdir=/snapshots/10/mnt:/snapshots/15/fs", "redirect_dir=off"},
+	}}
+	upper := []mount.Mount{{
+		Type:    "overlay",
+		Source:  "overlay",
+		Options: []string{"lowerdir=/snapshots/10/mnt:/snapshots/14/fs", "redirect_dir=off"},
+	}}
+
+	got, err := GetUpperdir(lower, upper)
+	if err != nil {
+		t.Fatalf("GetUpperdir returned error: %v", err)
+	}
+	if want := "/snapshots/14/fs"; got != want {
+		t.Fatalf("GetUpperdir = %q, want %q", got, want)
 	}
 }

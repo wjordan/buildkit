@@ -566,6 +566,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 		}()
 	}
 
+	solvePhaseStart := time.Now()
 	if fwd != nil {
 		var err error
 		select {
@@ -583,6 +584,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 			return nil, err
 		}
 	}
+	bklog.G(ctx).Infof("[timing] solve-frontend: %s", time.Since(solvePhaseStart))
 
 	if res == nil {
 		res = &frontend.Result{}
@@ -599,6 +601,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 		})
 	})
 
+	refStart := time.Now()
 	eg, ctx2 := errgroup.WithContext(ctx)
 	res.EachRef(func(ref solver.ResultProxy) error {
 		eg.Go(func() error {
@@ -610,6 +613,7 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
+	bklog.G(ctx).Infof("[timing] materialize-refs: %s", time.Since(refStart))
 
 	resProv, err = addProvenanceToResult(res, br)
 	if err != nil {
@@ -669,14 +673,25 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	}
 
 	var exporterResponse map[string]string
+	exportPhaseStart := time.Now()
 	exporterResponse, descrefs, err = s.runExporters(ctx, id, exp.Exporters, inlineCacheExporter, j, cached, inp)
 	if err != nil {
 		return nil, err
 	}
+	bklog.G(ctx).Infof("[timing] run-exporters: %s", time.Since(exportPhaseStart))
 
-	cacheExporterResponse, err := runCacheExporters(ctx, cacheExporters, j, cached, inp)
-	if err != nil {
-		return nil, err
+	// Run cache export asynchronously -- it doesn't affect the build result
+	// and can complete after Solve() returns. If the VM shuts down before it
+	// finishes, the next build just re-exports.
+	if len(cacheExporters) > 0 {
+		go func() {
+			cacheCtx := context.WithoutCancel(ctx)
+			cacheExportStart := time.Now()
+			if _, err := runCacheExporters(cacheCtx, cacheExporters, j, cached, inp); err != nil {
+				bklog.G(cacheCtx).Warnf("async cache export failed: %v", err)
+			}
+			bklog.G(cacheCtx).Infof("[timing] cache-export (async): %s", time.Since(cacheExportStart))
+		}()
 	}
 
 	if exporterResponse == nil {
@@ -686,11 +701,6 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	for k, v := range res.Metadata {
 		if strings.HasPrefix(k, "frontend.") {
 			exporterResponse[k] = string(v)
-		}
-	}
-	for k, v := range cacheExporterResponse {
-		if strings.HasPrefix(k, "cache.") {
-			exporterResponse[k] = v
 		}
 	}
 

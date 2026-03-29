@@ -61,16 +61,38 @@ func GetUpperdir(lower, upper []mount.Mount) (string, error) {
 			return "", err
 		}
 
-		// Check if the diff directory can be determined
-		if len(upperlayers) != len(lowerlayers)+1 {
+		// Check if the diff directory can be determined.
+		//
+		// Most overlay snapshotters expose the upper snapshot as the lower stack
+		// plus one extra top layer. Remote snapshotters like nydus can instead
+		// expose both lower and upper snapshots as overlay mounts with the same
+		// shared lower stack and different topmost local fs directories.
+		switch {
+		case len(upperlayers) == len(lowerlayers)+1:
+			for i := range lowerlayers {
+				if upperlayers[i] != lowerlayers[i] {
+					return "", errors.Errorf("layer %d must be common between upper and lower snapshots", i)
+				}
+			}
+			upperdir = upperlayers[len(upperlayers)-1] // get the topmost layer that indicates diff
+		case len(upperlayers) == len(lowerlayers) && len(upperlayers) > 0:
+			diffIdx := -1
+			for i := range lowerlayers {
+				if upperlayers[i] == lowerlayers[i] {
+					continue
+				}
+				if diffIdx != -1 {
+					return "", errors.Errorf("cannot determine diff of more than one upper directories")
+				}
+				diffIdx = i
+			}
+			if diffIdx == -1 {
+				return "", errors.Errorf("upper and lower snapshots do not expose a distinct diff layer")
+			}
+			upperdir = upperlayers[diffIdx]
+		default:
 			return "", errors.Errorf("cannot determine diff of more than one upper directories")
 		}
-		for i := range lowerlayers {
-			if upperlayers[i] != lowerlayers[i] {
-				return "", errors.Errorf("layer %d must be common between upper and lower snapshots", i)
-			}
-		}
-		upperdir = upperlayers[len(upperlayers)-1] // get the topmost layer that indicates diff
 	} else {
 		return "", errors.Errorf("multiple mount configurations are not supported")
 	}
@@ -349,13 +371,27 @@ func sameDirent(f1, f2 os.FileInfo, f1fullPath, f2fullPath string) (bool, error)
 			if f1.Size() == 0 {
 				return true, nil
 			}
-			return compareFileContent(f1fullPath, f2fullPath)
+			eq, err := compareFileContent(f1fullPath, f2fullPath)
+			if err != nil && ignoreContentCompareError(err) {
+				// Lazy/remote lower filesystems can reject this rare slow-path
+				// byte-for-byte comparison on copied-up files. Treat the files as
+				// changed so export can continue by including the copied-up file.
+				return false, nil
+			}
+			return eq, err
 		} else if t1.Nanosecond() != t2.Nanosecond() {
 			return false, nil
 		}
 	}
 
 	return true, nil
+}
+
+func ignoreContentCompareError(err error) bool {
+	return errors.Is(err, unix.EINVAL) ||
+		errors.Is(err, unix.EIO) ||
+		errors.Is(err, unix.ENOTSUP) ||
+		errors.Is(err, unix.EOPNOTSUPP)
 }
 
 // Ported from continuity project
