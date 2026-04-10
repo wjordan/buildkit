@@ -61,6 +61,9 @@ func fillInsecureOpts(host string, c config.RegistryConfig, h docker.RegistryHos
 	} else if isHTTP {
 		h2 := h
 		h2.Scheme = "http"
+		h2.Client = &http.Client{
+			Transport: tracing.NewTransport(newDefaultTransport()),
+		}
 		return &h2, nil
 	}
 

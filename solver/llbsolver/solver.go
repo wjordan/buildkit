@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	intoto "github.com/in-toto/in-toto-golang/in_toto"
@@ -563,9 +564,10 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 			return nil, err1
 		}
 		defer func() {
-			// Run build history finalization asynchronously -- it involves
-			// expensive containerd lease operations and doesn't affect the
-			// build result. Errors are logged but don't fail the build.
+			// Close progress synchronously so the client's status stream
+			// gets EOF immediately. Then run the expensive history
+			// finalization (containerd lease ops) asynchronously.
+			j.CloseProgress()
 			go func() {
 				recStart := time.Now()
 				if recErr := rec(context.WithoutCancel(ctx), resProv, descrefs, err); recErr != nil {
@@ -693,18 +695,23 @@ func (s *Solver) Solve(ctx context.Context, id string, sessionID string, req fro
 	}
 	bklog.G(ctx).Infof("[timing] run-exporters: %s", time.Since(exportPhaseStart))
 
-	// Run cache export asynchronously -- it doesn't affect the build result
-	// and can complete after Solve() returns. If the VM shuts down before it
-	// finishes, the next build just re-exports.
+	// Flush all filesystem buffers so that metadata written during export
+	// (blob digests, cache keys) survives abrupt VM shutdown. Without this,
+	// the ext4 journal on a virtio-blk disk may still have dirty pages when
+	// the hypervisor kills the VM after Solve returns.
+	syncStart := time.Now()
+	syscall.Sync()
+	bklog.G(ctx).Infof("[timing] post-export-sync: %s", time.Since(syncStart))
+
+	// Run cache export synchronously so the registry cache manifest is
+	// available before the VM is killed. The export writes to the local
+	// vsock-proxied registry so it's typically fast (<200ms).
 	if len(cacheExporters) > 0 {
-		go func() {
-			cacheCtx := context.WithoutCancel(ctx)
-			cacheExportStart := time.Now()
-			if _, err := runCacheExporters(cacheCtx, cacheExporters, j, cached, inp); err != nil {
-				bklog.G(cacheCtx).Warnf("async cache export failed: %v", err)
-			}
-			bklog.G(cacheCtx).Infof("[timing] cache-export (async): %s", time.Since(cacheExportStart))
-		}()
+		cacheExportStart := time.Now()
+		if _, err := runCacheExporters(ctx, cacheExporters, j, cached, inp); err != nil {
+			bklog.G(ctx).Warnf("cache export failed: %v", err)
+		}
+		bklog.G(ctx).Infof("[timing] cache-export: %s", time.Since(cacheExportStart))
 	}
 
 	if exporterResponse == nil {
@@ -894,11 +901,13 @@ func (s *Solver) runExporters(ctx context.Context, ref string, exporters []expor
 					return runInlineCacheExporter(ctx, exp, inlineCacheExporter, job, cached)
 				})
 
+				expStart := time.Now()
 				resps[i], descs[i], err = exp.Export(ctx, inp, exporter.ExportBuildInfo{
 					Ref:         ref,
 					SessionID:   job.SessionID,
 					InlineCache: inlineCache,
 				})
+				bklog.G(ctx).Infof("[timing] exp.Export: %s", time.Since(expStart))
 				if err != nil {
 					return err
 				}

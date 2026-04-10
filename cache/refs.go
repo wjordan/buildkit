@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	obdlabel "github.com/containerd/accelerated-container-image/pkg/label"
@@ -98,6 +99,10 @@ type cacheRecord struct {
 	mountCache snapshot.Mountable
 
 	sizeG flightcontrol.Group[int64]
+
+	// lazyResult caches the isLazy check (avoids repeated gRPC calls
+	// to containerd's content store and snapshotter per ancestor walk).
+	lazyResult atomic.Pointer[bool]
 
 	// these are filled if multiple refs point to same data
 	equalMutable   *mutableRef
@@ -292,6 +297,18 @@ func (cr *cacheRecord) walkUniqueAncestors(f func(*cacheRecord) error) error {
 }
 
 func (cr *cacheRecord) isLazy(ctx context.Context) (bool, error) {
+	// Fast path: use cached result (laziness doesn't change during a build).
+	if v := cr.lazyResult.Load(); v != nil {
+		return *v, nil
+	}
+	result, err := cr.computeIsLazy(ctx)
+	if err == nil {
+		cr.lazyResult.Store(&result)
+	}
+	return result, err
+}
+
+func (cr *cacheRecord) computeIsLazy(ctx context.Context) (bool, error) {
 	if !cr.getBlobOnly() {
 		return false, nil
 	}

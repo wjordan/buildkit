@@ -59,7 +59,7 @@ type SourceOpt struct {
 
 type Source struct {
 	SourceOpt
-	gImageRes    flightcontrol.Group[*resolveImageResult]
+	gImageRes    flightcontrol.CachedGroup[*resolveImageResult]
 	gAttestChain flightcontrol.Group[*sourceresolver.AttestationChain]
 }
 

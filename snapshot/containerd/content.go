@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"context"
+	"sync"
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
@@ -12,12 +13,16 @@ import (
 )
 
 func NewContentStore(store content.Store, ns string) *Store {
-	return &Store{ns, store}
+	return &Store{ns: ns, Store: store}
 }
 
 type Store struct {
 	ns string
 	content.Store
+	// infoCache caches Info results to avoid repeated gRPC round-trips
+	// to containerd for the same digest. Blobs are immutable so a
+	// positive result never becomes stale during a build.
+	infoCache sync.Map // digest.Digest -> content.Info
 }
 
 func (c *Store) Namespace() string {
@@ -29,8 +34,15 @@ func (c *Store) WithNamespace(ns string) *Store {
 }
 
 func (c *Store) Info(ctx context.Context, dgst digest.Digest) (content.Info, error) {
+	if info, ok := c.infoCache.Load(dgst); ok {
+		return info.(content.Info), nil
+	}
 	ctx = namespaces.WithNamespace(ctx, c.ns)
-	return c.Store.Info(ctx, dgst)
+	info, err := c.Store.Info(ctx, dgst)
+	if err == nil {
+		c.infoCache.Store(dgst, info)
+	}
+	return info, err
 }
 
 func (c *Store) Update(ctx context.Context, info content.Info, fieldpaths ...string) (content.Info, error) {
