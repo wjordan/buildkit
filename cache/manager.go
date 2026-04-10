@@ -137,6 +137,13 @@ func NewManager(opt ManagerOpt) (Manager, error) {
 }
 
 func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor, parent ImmutableRef, opts ...RefOption) (ir ImmutableRef, rerr error) {
+	gbbStart := time.Now()
+	defer func() {
+		// Only log slow calls to avoid serial console overhead.
+		if d := time.Since(gbbStart); d > 50*time.Millisecond {
+			bklog.G(ctx).Infof("[timing] GetByBlob(%s): %s", desc.Digest.String()[:19], d)
+		}
+	}()
 	diffID, err := diffIDFromDescriptor(desc)
 	if err != nil {
 		return nil, err
@@ -146,15 +153,18 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 
 	descHandlers := descHandlersOf(opts...)
 	if desc.Digest != "" && (descHandlers == nil || descHandlers[desc.Digest] == nil) {
+		t := time.Now()
 		if _, err := cm.ContentStore.Info(ctx, desc.Digest); errors.Is(err, cerrdefs.ErrNotFound) {
 			return nil, NeedsRemoteProviderError([]digest.Digest{desc.Digest})
 		} else if err != nil {
 			return nil, err
 		}
+		_ = time.Since(t)
 	}
 
 	var p *immutableRef
 	if parent != nil {
+		t := time.Now()
 		p2, err := cm.Get(ctx, parent.ID(), nil, NoUpdateLastUsed, descHandlers)
 		if err != nil {
 			return nil, err
@@ -172,6 +182,7 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 		}
 		chainID = imagespecidentity.ChainID([]digest.Digest{p.getChainID(), chainID})
 		blobChainID = imagespecidentity.ChainID([]digest.Digest{p.getBlobChainID(), blobChainID})
+		_ = time.Since(t)
 	}
 
 	releaseParent := false
@@ -181,16 +192,22 @@ func (cm *cacheManager) GetByBlob(ctx context.Context, desc ocispecs.Descriptor,
 		}
 	}()
 
+	t := time.Now()
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
 	sis, err := cm.searchBlobchain(ctx, blobChainID)
+	_ = time.Since(t)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, si := range sis {
+		tGetStart := time.Now()
 		ref, err := cm.get(ctx, si.ID(), nil, opts...)
+		if d := time.Since(tGetStart); d > time.Millisecond {
+			bklog.G(ctx).Infof("[timing] GetByBlob.cmget(%s): %s", si.ID()[:min(len(si.ID()), 20)], d)
+		}
 		if err != nil {
 			if errors.As(err, &NeedsRemoteProviderError{}) {
 				// This shouldn't happen and indicates that blobchain IDs are being set incorrectly,
@@ -354,9 +371,14 @@ func (cm *cacheManager) Close() error {
 
 // Get returns an immutable snapshot reference for ID
 func (cm *cacheManager) Get(ctx context.Context, id string, pg progress.Controller, opts ...RefOption) (ImmutableRef, error) {
+	getStart := time.Now()
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	return cm.get(ctx, id, pg, opts...)
+	ref, err := cm.get(ctx, id, pg, opts...)
+	if d := time.Since(getStart); d > 5*time.Millisecond {
+		bklog.G(ctx).Infof("[timing] cacheManager.Get(%s): %s", id[:min(len(id), 20)], d)
+	}
+	return ref, err
 }
 
 // get requires manager lock to be taken

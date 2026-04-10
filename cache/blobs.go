@@ -10,6 +10,7 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"time"
 
 	obdlabel "github.com/containerd/accelerated-container-image/pkg/label"
 	obdcmd "github.com/containerd/accelerated-container-image/pkg/utils"
@@ -43,6 +44,12 @@ var ErrNoBlobs = errors.Errorf("no blobs for snapshot")
 // be returned. Caller must hold a lease when calling this function.
 // If forceCompression is specified but the blob of compressionType doesn't exist, this function creates it.
 func (sr *immutableRef) computeBlobChain(ctx context.Context, createIfNeeded bool, comp compression.Config, s session.Group) error {
+	cbcStart := time.Now()
+	defer func() {
+		if d := time.Since(cbcStart); d > 5*time.Millisecond {
+			bklog.G(ctx).Infof("[timing] computeBlobChain(%s): %s", sr.ID()[:min(len(sr.ID()), 12)], d)
+		}
+	}()
 	if _, ok := leases.FromContext(ctx); !ok {
 		return errors.Errorf("missing lease requirement for computeBlobChain")
 	}
@@ -96,9 +103,11 @@ func computeBlobChain(ctx context.Context, sr *immutableRef, createIfNeeded bool
 	if _, ok := filter[sr.ID()]; ok {
 		eg.Go(func() error {
 			l, err := g.Do(ctx, fmt.Sprintf("%s-%t", sr.ID(), createIfNeeded), func(ctx context.Context) (_ *leaseutil.LeaseRef, err error) {
-				if sr.getBlob() != "" {
+				if blob := sr.getBlob(); blob != "" {
+					bklog.G(ctx).Debugf("[computeBlobChain] %s: blob already set (%s)", sr.ID()[:min(len(sr.ID()), 12)], blob.String()[:min(len(blob.String()), 19)])
 					return nil, nil
 				}
+				bklog.G(ctx).Infof("[computeBlobChain] %s: blob NOT set, computing (kind=%d, createIfNeeded=%v)", sr.ID()[:min(len(sr.ID()), 12)], sr.kind(), createIfNeeded)
 				if !createIfNeeded {
 					return nil, errors.WithStack(ErrNoBlobs)
 				}

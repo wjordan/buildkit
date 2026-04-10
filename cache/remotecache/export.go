@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -184,10 +185,12 @@ func (ce *contentCacheExporter) Config() Config {
 
 func (ce *contentCacheExporter) Finalize(ctx context.Context) (map[string]string, error) {
 	res := make(map[string]string)
+	marshalStart := time.Now()
 	config, descs, err := ce.chains.Marshal(ctx)
 	if err != nil {
 		return nil, err
 	}
+	bklog.G(ctx).Infof("[timing] cache-export marshal: %s, layers=%d", time.Since(marshalStart), len(config.Layers))
 
 	if len(config.Layers) == 0 {
 		bklog.G(ctx).Warn("failed to match any cache with layers")
@@ -210,18 +213,22 @@ func (ce *contentCacheExporter) Finalize(ctx context.Context) (map[string]string
 	}
 
 	// Push all layer blobs in parallel using images.Dispatch.
+	pushStart := time.Now()
 	copyHandler := images.HandlerFunc(func(ctx context.Context, desc ocispecs.Descriptor) ([]ocispecs.Descriptor, error) {
+		layerStart := time.Now()
 		dgstPair := descs[desc.Digest]
 		layerDone := progress.OneOff(ctx, fmt.Sprintf("writing layer %s", desc.Digest))
 		if err := contentutil.Copy(ctx, ce.ingester, dgstPair.Provider, desc, ce.ref, logs.LoggerFromContext(ctx)); err != nil {
 			return nil, layerDone(errors.Wrap(err, "error writing layer blob"))
 		}
+		bklog.G(ctx).Infof("[timing] cache-export push-layer %s: %s (size=%d)", desc.Digest.String()[:16], time.Since(layerStart), desc.Size)
 		layerDone(nil)
 		return nil, nil
 	})
 	if err := images.Dispatch(ctx, copyHandler, semaphore.NewWeighted(limited.DefaultMaxConcurrency), layerDescs...); err != nil {
 		return nil, err
 	}
+	bklog.G(ctx).Infof("[timing] cache-export push-all-layers: %s", time.Since(pushStart))
 
 	// Add blobs to cache manifest in order.
 	for _, desc := range layerDescs {
@@ -230,6 +237,7 @@ func (ce *contentCacheExporter) Finalize(ctx context.Context) (map[string]string
 
 	cache.FinalizeCache(ctx)
 
+	metaStart := time.Now()
 	dt, err := json.Marshal(config)
 	if err != nil {
 		return nil, err
@@ -260,11 +268,7 @@ func (ce *contentCacheExporter) Finalize(ctx context.Context) (map[string]string
 		MediaType: cache.MediaType(),
 	}
 
-	mfstLog := fmt.Sprintf("writing cache manifest %s", dgst)
-	if ce.imageManifest {
-		mfstLog = fmt.Sprintf("writing cache image manifest %s", dgst)
-	}
-	mfstDone := progress.OneOff(ctx, mfstLog)
+	mfstDone := progress.OneOff(ctx, fmt.Sprintf("writing cache manifest %s", dgst))
 	if err := content.WriteBlob(ctx, ce.ingester, dgst.String(), bytes.NewReader(dt), desc); err != nil {
 		return nil, mfstDone(errors.Wrap(err, "error writing manifest blob"))
 	}
@@ -274,6 +278,7 @@ func (ce *contentCacheExporter) Finalize(ctx context.Context) (map[string]string
 	}
 	res[ExporterResponseManifestDesc] = string(descJSON)
 	mfstDone(nil)
+	bklog.G(ctx).Infof("[timing] cache-export meta+manifest: %s", time.Since(metaStart))
 
 	return res, nil
 }

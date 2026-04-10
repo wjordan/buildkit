@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -82,12 +83,14 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 		scope.Insecure = true
 	}
 
+	t0 := time.Now()
 	resolver := resolver.DefaultPool.GetResolver(hosts, ref, scope, sm, session.NewGroup(sid))
 
 	pusher, err := Pusher(ctx, resolver, ref)
 	if err != nil {
 		return err
 	}
+	bklog.G(ctx).Infof("[timing] push.resolver+pusher: %s", time.Since(t0))
 
 	var m sync.Mutex
 	manifestStack := []ocispecs.Descriptor{}
@@ -117,6 +120,7 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 		dedupeHandler(pushUpdateSourceHandler),
 	)
 
+	t1 := time.Now()
 	ra, err := provider.ReaderAt(ctx, desc)
 	if err != nil {
 		return err
@@ -126,7 +130,9 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 	if err != nil {
 		return err
 	}
+	bklog.G(ctx).Infof("[timing] push.readManifest: %s", time.Since(t1))
 
+	t2 := time.Now()
 	layersDone := progress.OneOff(ctx, "pushing layers")
 	err = images.Dispatch(ctx, skipNonDistributableBlobs(images.Handlers(handlers...)), nil, ocispecs.Descriptor{
 		Digest:    dgst,
@@ -136,13 +142,16 @@ func Push(ctx context.Context, sm *session.Manager, sid string, provider content
 	if err := layersDone(err); err != nil {
 		return err
 	}
+	bklog.G(ctx).Infof("[timing] push.layers: %s", time.Since(t2))
 
+	t3 := time.Now()
 	mfstDone := progress.OneOff(ctx, fmt.Sprintf("pushing manifest for %s", ref))
 	for i := len(manifestStack) - 1; i >= 0; i-- {
 		if _, err := pushHandler(ctx, manifestStack[i]); err != nil {
 			return mfstDone(err)
 		}
 	}
+	bklog.G(ctx).Infof("[timing] push.manifest: %s", time.Since(t3))
 	return mfstDone(nil)
 }
 

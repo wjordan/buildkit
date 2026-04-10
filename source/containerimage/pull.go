@@ -17,6 +17,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/buildkit/cache"
 	"github.com/moby/buildkit/client"
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
 	"github.com/moby/buildkit/session"
 	"github.com/moby/buildkit/solver"
@@ -87,6 +88,10 @@ func mainManifestKey(desc ocispecs.Descriptor, platform ocispecs.Platform, layer
 }
 
 func (p *puller) CacheKey(ctx context.Context, jobCtx solver.JobContext, index int) (cacheKey string, imgDigest string, cacheOpts solver.CacheOpts, cacheDone bool, err error) {
+	ckStart := time.Now()
+	defer func() {
+		bklog.G(ctx).Infof("[timing] puller.CacheKey(%s, index=%d): %s", p.Ref, index, time.Since(ckStart))
+	}()
 	var g session.Group
 	if jobCtx != nil {
 		g = jobCtx.Session()
@@ -211,6 +216,10 @@ func (p *puller) CacheKey(ctx context.Context, jobCtx solver.JobContext, index i
 }
 
 func (p *puller) Snapshot(ctx context.Context, jobCtx solver.JobContext) (ir cache.ImmutableRef, err error) {
+	snapStart := time.Now()
+	defer func() {
+		bklog.G(ctx).Infof("[timing] puller.Snapshot(%s): %s", p.Ref, time.Since(snapStart))
+	}()
 	var g session.Group
 	if jobCtx != nil {
 		g = jobCtx.Session()

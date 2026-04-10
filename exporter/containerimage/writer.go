@@ -138,10 +138,12 @@ func (ic *ImageWriter) Commit(ctx context.Context, inp *exporter.Source, session
 			baseImg = &baseImgX
 		}
 
+		exportLayersStart := time.Now()
 		remotes, err := ic.exportLayers(ctx, opts.RefCfg, session.NewGroup(sessionID), ref)
 		if err != nil {
 			return nil, err
 		}
+		bklog.G(ctx).Infof("[timing] exportLayers: %s", time.Since(exportLayersStart))
 		remote := &remotes[0]
 		if opts.RewriteTimestamp {
 			remote, err = ic.rewriteRemoteWithEpoch(ctx, opts, remote, baseImg)
@@ -170,10 +172,12 @@ func (ic *ImageWriter) Commit(ctx context.Context, inp *exporter.Source, session
 			}
 		}
 
+		commitStart := time.Now()
 		mfstDesc, configDesc, err := ic.commitDistributionManifest(ctx, opts, ref, config, remote, annotations, inlineCacheEntry, opts.Epoch, session.NewGroup(sessionID), baseImg)
 		if err != nil {
 			return nil, err
 		}
+		bklog.G(ctx).Infof("[timing] commitDistributionManifest: %s", time.Since(commitStart))
 		if mfstDesc.Annotations == nil {
 			mfstDesc.Annotations = make(map[string]string)
 		}

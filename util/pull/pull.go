@@ -3,6 +3,7 @@ package pull
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -13,6 +14,7 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/session"
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/util/contentutil"
 	"github.com/moby/buildkit/util/flightcontrol"
 	"github.com/moby/buildkit/util/imageutil"
@@ -54,6 +56,7 @@ type PulledManifests struct {
 }
 
 func (p *Puller) resolve(ctx context.Context, resolver remotes.Resolver) error {
+	resolveStart := time.Now()
 	_, err := p.g.Do(ctx, "", func(ctx context.Context) (_ struct{}, err error) {
 		if p.resolveErr != nil || p.resolveDone {
 			return struct{}{}, p.resolveErr
@@ -64,6 +67,7 @@ func (p *Puller) resolve(ctx context.Context, resolver remotes.Resolver) error {
 			}
 		}()
 		if p.tryLocalResolve(ctx) == nil {
+			bklog.G(ctx).Infof("[timing] puller.resolve(%s) local hit: %s", p.Src.String(), time.Since(resolveStart))
 			return
 		}
 		ref, desc, err := resolver.Resolve(ctx, p.Src.String())
@@ -73,6 +77,7 @@ func (p *Puller) resolve(ctx context.Context, resolver remotes.Resolver) error {
 		p.desc = desc
 		p.ref = ref
 		p.resolveDone = true
+		bklog.G(ctx).Infof("[timing] puller.resolve(%s) remote: %s", p.Src.String(), time.Since(resolveStart))
 		return struct{}{}, nil
 	})
 	return err

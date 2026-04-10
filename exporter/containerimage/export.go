@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -20,6 +21,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/rootfs"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/containerd/platforms"
+	"github.com/moby/buildkit/util/bklog"
 	"github.com/moby/buildkit/cache"
 	cacheconfig "github.com/moby/buildkit/cache/config"
 	"github.com/moby/buildkit/client"
@@ -384,6 +386,7 @@ func (e *imageExporterInstance) Export(ctx context.Context, src *exporter.Source
 }
 
 func (e *imageExporterInstance) pushImage(ctx context.Context, src *exporter.Source, sessionID string, targetName string, dgst digest.Digest) error {
+	pushStart := time.Now()
 	var refs []cache.ImmutableRef
 	if src.Ref != nil {
 		refs = append(refs, src.Ref)
@@ -397,6 +400,7 @@ func (e *imageExporterInstance) pushImage(ctx context.Context, src *exporter.Sou
 
 	annotations := map[digest.Digest]map[string]string{}
 	mprovider := contentutil.NewMultiProvider(e.opt.ImageWriter.ContentStore())
+	getRemotesStart := time.Now()
 	for _, ref := range refs {
 		remotes, err := ref.GetRemotes(ctx, false, e.opts.RefCfg, false, session.NewGroup(sessionID))
 		if err != nil {
@@ -408,7 +412,13 @@ func (e *imageExporterInstance) pushImage(ctx context.Context, src *exporter.Sou
 			addAnnotations(annotations, desc)
 		}
 	}
-	return push.Push(ctx, e.opt.SessionManager, sessionID, mprovider, e.opt.ImageWriter.ContentStore(), dgst, targetName, e.insecure, e.opt.RegistryHosts, e.pushByDigest, annotations)
+	bklog.G(ctx).Infof("[timing] pushImage.getRemotes: %s (refs=%d)", time.Since(getRemotesStart), len(refs))
+
+	pushCallStart := time.Now()
+	err := push.Push(ctx, e.opt.SessionManager, sessionID, mprovider, e.opt.ImageWriter.ContentStore(), dgst, targetName, e.insecure, e.opt.RegistryHosts, e.pushByDigest, annotations)
+	bklog.G(ctx).Infof("[timing] pushImage.push: %s", time.Since(pushCallStart))
+	bklog.G(ctx).Infof("[timing] pushImage total: %s", time.Since(pushStart))
+	return err
 }
 
 func (e *imageExporterInstance) unpackImage(ctx context.Context, img images.Image, src *exporter.Source, s session.Group) (err0 error) {
